@@ -137,12 +137,13 @@ Result<byte_string> TinyVmPrecompile::execute(
     byte_string_view input, evmc_address const &msg_sender,
     evmc_uint256be const &msg_value)
 {
-    // Decode tx.value as u64
+    // Decode tx.value as u128 (lo + hi u64 halves)
     auto const native = intx::be::load<uint256_t>(msg_value);
-    if (MONAD_UNLIKELY(native > std::numeric_limits<uint64_t>::max())) {
+    if (MONAD_UNLIKELY(native >> 128 != 0)) {
         return TinyVmPrecompileError::InvalidInput;
     }
-    uint64_t const value_u64 = static_cast<uint64_t>(native);
+    uint64_t const val_lo = static_cast<uint64_t>(native & 0xFFFFFFFFFFFFFFFF);
+    uint64_t const val_hi = static_cast<uint64_t>((native >> 64) & 0xFFFFFFFFFFFFFFFF);
 
     // Set up store callbacks bridging Rust → C++ State
     StoreContext store_ctx{&state_, &TINYVM_PRECOMPILE_ADDRESS};
@@ -151,7 +152,7 @@ Result<byte_string> TinyVmPrecompile::execute(
 
     auto const rc = tinyvm_apply(
         msg_sender.bytes, sizeof(msg_sender.bytes),
-        value_u64,
+        val_lo, val_hi,
         input.data(), input.size(),
         &store_ctx,
         store_get_callback,

@@ -235,7 +235,7 @@ pub unsafe extern "C" fn tinyvm_gas_cost(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyvm_apply(
     sender: *const u8, sender_len: usize,
-    tx_value: u64,
+    tx_value_lo: u64, tx_value_hi: u64,
     input: *const u8, input_len: usize,
     store_ctx: *mut c_void,
     store_get: StoreGetFn,
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn tinyvm_apply(
 
     let ctx = TinyVmTxContext {
         sender: sender_arr,
-        tx_value,
+        tx_value: (tx_value_lo as u128) | ((tx_value_hi as u128) << 64),
     };
 
     let mut store = FfiStore {

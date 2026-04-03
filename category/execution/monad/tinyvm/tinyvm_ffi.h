@@ -41,7 +41,7 @@ uint64_t tinyvm_gas_cost(uint8_t const *input, size_t input_len);
 // reads/writes state via callbacks, returns escrow delta.
 int tinyvm_apply(
     uint8_t const *sender, size_t sender_len,
-    uint64_t tx_value,
+    uint64_t tx_value_lo, uint64_t tx_value_hi,
     uint8_t const *input, size_t input_len,
     void *store_ctx,
     tinyvm_store_get_fn store_get,
