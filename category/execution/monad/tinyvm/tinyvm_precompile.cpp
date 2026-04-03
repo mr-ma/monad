@@ -2,6 +2,7 @@
 //
 // Generic TinyVM precompile. Delegates all logic to Rust via FFI.
 
+#include <category/core/keccak.hpp>
 #include <category/execution/monad/tinyvm/tinyvm_precompile.hpp>
 #include <category/execution/monad/tinyvm/tinyvm_ffi.h>
 #include <category/execution/ethereum/core/contract/abi_encode.hpp>
@@ -18,11 +19,31 @@ constexpr uint64_t TINYVM_FALLBACK_COST = 100;
 constexpr size_t ERROR_BUF_LEN = 256;
 
 // Bridge C++ State to Rust TinyVmStateStore via FFI callbacks.
+// Rust values may exceed 32 bytes (bincode-serialized structs), so we
+// spread them across consecutive EVM storage slots:
+//   base_slot   = keccak256(key)  → stores value length as uint256
+//   base_slot+1 = first 32-byte chunk of value
+//   base_slot+2 = second chunk ...
 struct StoreContext
 {
     monad::State *state;
     monad::Address const *precompile_addr;
 };
+
+monad::bytes32_t key_to_base_slot(uint8_t const *key, size_t key_len)
+{
+    return monad::to_bytes(
+        monad::keccak256(monad::byte_string_view{key, key_len}));
+}
+
+monad::bytes32_t slot_plus(monad::bytes32_t const &base, size_t offset)
+{
+    auto val = intx::be::load<monad::uint256_t>(base);
+    val += offset;
+    monad::bytes32_t out{};
+    intx::be::store(out.bytes, val);
+    return out;
+}
 
 int store_get_callback(
     void *ctx,
@@ -31,21 +52,32 @@ int store_get_callback(
     size_t *value_len)
 {
     auto *sc = static_cast<StoreContext *>(ctx);
-    // Map Rust store key to EVM storage slot via keccak
-    // For now, use the key bytes directly as the storage slot
-    // (padded to bytes32 or hashed if > 32 bytes)
-    monad::bytes32_t slot{};
-    if (key_len <= 32) {
-        std::memcpy(slot.bytes + 32 - key_len, key, key_len);
-    } else {
-        // Hash long keys
-        auto hash = monad::keccak256(monad::byte_string_view{key, key_len});
-        std::memcpy(slot.bytes, hash.bytes, 32);
+    auto const base = key_to_base_slot(key, key_len);
+
+    // Slot 0: stored length
+    auto const len_slot = sc->state->get_storage(*sc->precompile_addr, base);
+    auto const stored_len = static_cast<size_t>(
+        intx::be::load<monad::uint256_t>(len_slot));
+
+    if (stored_len == 0) {
+        *value_len = 0;
+        return 0; // key not found
     }
 
-    auto const val = sc->state->get_storage(*sc->precompile_addr, slot);
-    std::memcpy(value_buf, val.bytes, std::min(value_buf_len, sizeof(val.bytes)));
-    *value_len = sizeof(val.bytes);
+    size_t const copy_len = std::min(stored_len, value_buf_len);
+    size_t const num_chunks = (stored_len + 31) / 32;
+
+    for (size_t i = 0; i < num_chunks; ++i) {
+        auto const chunk_slot = slot_plus(base, i + 1);
+        auto const chunk = sc->state->get_storage(*sc->precompile_addr, chunk_slot);
+        size_t const offset = i * 32;
+        size_t const chunk_copy = std::min<size_t>(32, copy_len - std::min(offset, copy_len));
+        if (chunk_copy > 0) {
+            std::memcpy(value_buf + offset, chunk.bytes, chunk_copy);
+        }
+    }
+
+    *value_len = copy_len;
     return 1;
 }
 
@@ -55,17 +87,22 @@ void store_set_callback(
     uint8_t const *value, size_t value_len)
 {
     auto *sc = static_cast<StoreContext *>(ctx);
-    monad::bytes32_t slot{};
-    if (key_len <= 32) {
-        std::memcpy(slot.bytes + 32 - key_len, key, key_len);
-    } else {
-        auto hash = monad::keccak256(monad::byte_string_view{key, key_len});
-        std::memcpy(slot.bytes, hash.bytes, 32);
-    }
+    auto const base = key_to_base_slot(key, key_len);
 
-    monad::bytes32_t val{};
-    std::memcpy(val.bytes, value, std::min(value_len, sizeof(val.bytes)));
-    sc->state->set_storage(*sc->precompile_addr, slot, val);
+    // Slot 0: store length
+    monad::bytes32_t len_val{};
+    intx::be::store(len_val.bytes, monad::uint256_t{value_len});
+    sc->state->set_storage(*sc->precompile_addr, base, len_val);
+
+    // Slots 1..N: store 32-byte chunks
+    size_t const num_chunks = (value_len + 31) / 32;
+    for (size_t i = 0; i < num_chunks; ++i) {
+        monad::bytes32_t chunk{};
+        size_t const offset = i * 32;
+        size_t const chunk_len = std::min<size_t>(32, value_len - offset);
+        std::memcpy(chunk.bytes, value + offset, chunk_len);
+        sc->state->set_storage(*sc->precompile_addr, slot_plus(base, i + 1), chunk);
+    }
 }
 
 MONAD_ANONYMOUS_NAMESPACE_END
