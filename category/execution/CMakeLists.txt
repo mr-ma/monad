@@ -323,39 +323,39 @@ monad_compile_options(monad_execution_ethereum)
 
 target_link_options(monad_execution_ethereum PRIVATE LINKER:-z,defs)
 
-set(TINYVM_CONFIDENTIAL_FFI_PROFILE "debug")
-set(TINYVM_CONFIDENTIAL_FFI_CARGO_ARGS "")
+set(TINYVM_FFI_PROFILE "debug")
+set(TINYVM_FFI_CARGO_ARGS "")
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-  set(TINYVM_CONFIDENTIAL_FFI_PROFILE "release")
-  set(TINYVM_CONFIDENTIAL_FFI_CARGO_ARGS --release)
+  set(TINYVM_FFI_PROFILE "release")
+  set(TINYVM_FFI_CARGO_ARGS --release)
 endif()
 
-set(TINYVM_CONFIDENTIAL_FFI_LIB
-    "${CMAKE_SOURCE_DIR}/rust/target/${TINYVM_CONFIDENTIAL_FFI_PROFILE}/libtinyvm_confidential_ffi.a")
+set(TINYVM_FFI_LIB
+    "${CMAKE_SOURCE_DIR}/rust/target/${TINYVM_FFI_PROFILE}/libtinyvm_ffi.a")
 
 add_custom_command(
-  OUTPUT "${TINYVM_CONFIDENTIAL_FFI_LIB}"
-  COMMAND "${CARGO_EXECUTABLE}" build --manifest-path "${CMAKE_SOURCE_DIR}/rust/Cargo.toml" -p tinyvm-confidential-ffi ${TINYVM_CONFIDENTIAL_FFI_CARGO_ARGS}
+  OUTPUT "${TINYVM_FFI_LIB}"
+  COMMAND "${CARGO_EXECUTABLE}" build --manifest-path "${CMAKE_SOURCE_DIR}/rust/Cargo.toml" -p tinyvm-ffi ${TINYVM_FFI_CARGO_ARGS}
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
   DEPENDS
     "${CMAKE_SOURCE_DIR}/rust/Cargo.toml"
     "${CMAKE_SOURCE_DIR}/rust/Cargo.lock"
-    "${CMAKE_SOURCE_DIR}/rust/crates/tinyvm-confidential-ffi/Cargo.toml"
-    "${CMAKE_SOURCE_DIR}/rust/crates/tinyvm-confidential-ffi/src/lib.rs"
+    "${CMAKE_SOURCE_DIR}/rust/crates/tinyvm-ffi/Cargo.toml"
+    "${CMAKE_SOURCE_DIR}/rust/crates/tinyvm-ffi/src/lib.rs"
     "${CMAKE_SOURCE_DIR}/monad-tinyvm/crates/backends/confidential-balance/Cargo.toml"
     "${CMAKE_SOURCE_DIR}/monad-tinyvm/crates/backends/confidential-balance/src/lib.rs"
-  COMMENT "Building tinyvm-confidential-ffi Rust static library"
+  COMMENT "Building tinyvm-ffi Rust static library"
   VERBATIM)
 
 add_custom_target(
-  tinyvm_confidential_ffi_build ALL
-  DEPENDS "${TINYVM_CONFIDENTIAL_FFI_LIB}")
+  tinyvm_ffi_build ALL
+  DEPENDS "${TINYVM_FFI_LIB}")
 
-add_library(tinyvm_confidential_ffi STATIC IMPORTED GLOBAL)
+add_library(tinyvm_ffi STATIC IMPORTED GLOBAL)
 set_target_properties(
-  tinyvm_confidential_ffi
-  PROPERTIES IMPORTED_LOCATION "${TINYVM_CONFIDENTIAL_FFI_LIB}")
-add_dependencies(tinyvm_confidential_ffi tinyvm_confidential_ffi_build)
+  tinyvm_ffi
+  PROPERTIES IMPORTED_LOCATION "${TINYVM_FFI_LIB}")
+add_dependencies(tinyvm_ffi tinyvm_ffi_build)
 
 target_link_libraries(
   monad_execution_native
@@ -366,7 +366,7 @@ target_link_libraries(
   PUBLIC intx::intx
   PUBLIC magic_enum::magic_enum
   PUBLIC quill::quill
-  PUBLIC tinyvm_confidential_ffi)
+  PUBLIC tinyvm_ffi)
 monad_compile_options(monad_execution_native)
 
 # ##############################################################################

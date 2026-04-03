@@ -33,6 +33,9 @@ typedef struct tinyvm_apply_result
     uint8_t success;         // 1 = ok, 0 = revert
 } tinyvm_apply_result;
 
+// Returns gas cost for a TinyVM call, or 0 on decode failure.
+uint64_t tinyvm_gas_cost(uint8_t const *input, size_t input_len);
+
 // Generic TinyVM entry point.
 // Decodes envelope, dispatches to backend, verifies proofs,
 // reads/writes state via callbacks, returns escrow delta.

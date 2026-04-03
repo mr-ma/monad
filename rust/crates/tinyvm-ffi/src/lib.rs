@@ -84,7 +84,16 @@ fn registry() -> TinyVmRegistry<'static> {
     TinyVmRegistry::new(&BACKENDS)
 }
 
-// ── FFI entry point ─────────────────────────────────────────────────────────
+// ── FFI entry points ────────────────────────────────────────────────────────
+
+/// Returns gas cost for the given TinyVM call input, or 0 on decode failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tinyvm_gas_cost(
+    input: *const u8, input_len: usize,
+) -> u64 {
+    let input_slice = unsafe { slice::from_raw_parts(input, input_len) };
+    registry().gas_cost(input_slice).unwrap_or(0)
+}
 
 /// Generic TinyVM entry point called by the C++ precompile.
 /// Decodes envelope, dispatches to backend, verifies + applies state.

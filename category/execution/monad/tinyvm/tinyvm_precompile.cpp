@@ -14,7 +14,6 @@
 
 MONAD_ANONYMOUS_NAMESPACE_BEGIN
 
-constexpr uint64_t TINYVM_GAS_COST = 80'000;
 constexpr uint64_t TINYVM_FALLBACK_COST = 100;
 constexpr size_t ERROR_BUF_LEN = 256;
 
@@ -82,11 +81,13 @@ TinyVmPrecompile::TinyVmPrecompile(State &state, CallTracerBase &tracer)
 
 template <Traits traits>
 std::pair<TinyVmPrecompile::PrecompileFunc, uint64_t>
-TinyVmPrecompile::precompile_dispatch(byte_string_view &)
+TinyVmPrecompile::precompile_dispatch(byte_string_view &input)
 {
-    // All TinyVM operations go through the same generic execute path.
-    // Gas cost is uniform — the Rust side determines the actual work.
-    return {&TinyVmPrecompile::execute, TINYVM_GAS_COST};
+    uint64_t cost = tinyvm_gas_cost(input.data(), input.size());
+    if (cost == 0) {
+        return {&TinyVmPrecompile::precompile_fallback, TINYVM_FALLBACK_COST};
+    }
+    return {&TinyVmPrecompile::execute, cost};
 }
 
 EXPLICIT_MONAD_TRAITS(TinyVmPrecompile::precompile_dispatch);
