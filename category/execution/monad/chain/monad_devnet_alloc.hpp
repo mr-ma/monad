@@ -290,6 +290,9 @@ inline constexpr char const *MONAD_DEVNET_ALLOC = R"(
     },
     "15935EC6176290369194c9d73Cb82C2f2400F8A7": {
         "wei_balance": "100000000000000000000000000000000000000"
+    },
+    "0000000000000000000000000000000000000420": {
+        "wei_balance": "1"
     }
 }
 )";
