@@ -1,210 +1,146 @@
-use std::{
-    ffi::{c_char, c_int},
-    panic::{AssertUnwindSafe, catch_unwind},
-    ptr, slice,
+//! TinyVM generic FFI bridge.
+//!
+//! Single entry point `tinyvm_apply` that delegates to the Rust backend registry.
+//! The C++ precompile calls this; Rust drives state reads/writes via callbacks.
+
+use std::ffi::c_void;
+use std::slice;
+
+use tiny_privacy_vm_confidential_backend::ConfidentialTinyVmBackend;
+use tiny_privacy_vm_runtime::{
+    TinyVmBackend, TinyVmRegistry, TinyVmStateStore, TinyVmTxContext,
 };
 
-use tiny_privacy_vm_confidential_backend::{
-    CONFIDENTIAL_BACKEND_ID, ConfidentialTinyVmBackend, CryptoConfig, PublicBalanceChangeBundle,
-    PublicBalanceChangeKind, TransferCall, assemble_public_balance_change_call,
-    assemble_transfer_call, canonical_empty_commitment,
-};
-use tiny_privacy_vm_runtime::{TinyVmBackend, TinyVmOperation, decode_tinyvm_artifacts};
+// ── Callback-backed store ───────────────────────────────────────────────────
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TinyVmBackendTransferPublicOut {
-    pub token: [u8; 32],
-    pub from: [u8; 20],
-    pub to: [u8; 20],
-    pub sender_version: u64,
-    pub recipient_version: u64,
-    pub sender_old_commitment: [u8; 32],
-    pub sender_new_commitment: [u8; 32],
-    pub recipient_old_commitment: [u8; 32],
-    pub recipient_new_commitment: [u8; 32],
+type StoreGetFn = unsafe extern "C" fn(
+    ctx: *mut c_void,
+    key: *const u8, key_len: usize,
+    value_buf: *mut u8, value_buf_len: usize,
+    value_len: *mut usize,
+) -> i32;
+
+type StoreSetFn = unsafe extern "C" fn(
+    ctx: *mut c_void,
+    key: *const u8, key_len: usize,
+    value: *const u8, value_len: usize,
+);
+
+struct FfiStore {
+    ctx: *mut c_void,
+    get_fn: StoreGetFn,
+    set_fn: StoreSetFn,
 }
 
+impl TinyVmStateStore for FfiStore {
+    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        let mut buf = vec![0u8; 4096];
+        let mut len: usize = 0;
+        let rc = unsafe {
+            (self.get_fn)(
+                self.ctx,
+                key.as_ptr(), key.len(),
+                buf.as_mut_ptr(), buf.len(),
+                &mut len,
+            )
+        };
+        if rc != 1 || len == 0 {
+            return None;
+        }
+        buf.truncate(len);
+        // Check if all zeros (EVM default = not set)
+        if buf.iter().all(|&b| b == 0) {
+            return None;
+        }
+        Some(buf)
+    }
+
+    fn set(&mut self, key: &[u8], value: &[u8]) {
+        unsafe {
+            (self.set_fn)(
+                self.ctx,
+                key.as_ptr(), key.len(),
+                value.as_ptr(), value.len(),
+            );
+        }
+    }
+}
+
+// ── Result struct ───────────────────────────────────────────────────────────
+
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TinyVmBackendPublicBalanceChangePublicOut {
-    pub kind: u8,
+pub struct TinyVmApplyResult {
+    pub escrow_delta: i64,
     pub token: [u8; 32],
     pub owner: [u8; 20],
-    pub version: u64,
-    pub public_amount: u64,
-    pub old_commitment: [u8; 32],
-    pub new_commitment: [u8; 32],
+    pub success: u8,
 }
 
-fn write_error(message: &str, error_buf: *mut c_char, error_len: usize) {
-    if error_buf.is_null() || error_len == 0 {
-        return;
-    }
+// ── Registry ────────────────────────────────────────────────────────────────
 
-    let bytes = message.as_bytes();
-    let copy_len = bytes.len().min(error_len.saturating_sub(1));
-
-    unsafe {
-        ptr::copy_nonoverlapping(bytes.as_ptr(), error_buf.cast::<u8>(), copy_len);
-        *error_buf.add(copy_len) = 0;
-    }
+fn registry() -> TinyVmRegistry<'static> {
+    static BACKEND: ConfidentialTinyVmBackend = ConfidentialTinyVmBackend;
+    static BACKENDS: [&dyn TinyVmBackend; 1] = [&BACKEND];
+    TinyVmRegistry::new(&BACKENDS)
 }
 
-fn ffi_guard<F>(error_buf: *mut c_char, error_len: usize, f: F) -> c_int
-where
-    F: FnOnce() -> anyhow::Result<()>,
-{
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(Ok(())) => {
-            write_error("", error_buf, error_len);
+// ── FFI entry point ─────────────────────────────────────────────────────────
+
+/// Generic TinyVM entry point called by the C++ precompile.
+/// Decodes envelope, dispatches to backend, verifies + applies state.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tinyvm_apply(
+    sender: *const u8, sender_len: usize,
+    tx_value: u64,
+    input: *const u8, input_len: usize,
+    store_ctx: *mut c_void,
+    store_get: StoreGetFn,
+    store_set: StoreSetFn,
+    result: *mut TinyVmApplyResult,
+    error_buf: *mut u8, error_len: usize,
+) -> i32 {
+    let sender_slice = unsafe { slice::from_raw_parts(sender, sender_len) };
+    let input_slice = unsafe { slice::from_raw_parts(input, input_len) };
+
+    let mut sender_arr = [0u8; 20];
+    if sender_len >= 20 {
+        sender_arr.copy_from_slice(&sender_slice[..20]);
+    }
+
+    let ctx = TinyVmTxContext {
+        sender: sender_arr,
+        tx_value,
+    };
+
+    let mut store = FfiStore {
+        ctx: store_ctx,
+        get_fn: store_get,
+        set_fn: store_set,
+    };
+
+    match registry().apply_input(&ctx, input_slice, &mut store) {
+        Ok(_decoded) => {
+            // TODO: extract escrow_delta from the backend's state changes.
+            // For now, the backend handles escrow internally via the store.
+            // The C++ side needs to know the balance transfer amount for
+            // unshield. This will be addressed when MRC20 support lands.
+            // Shield works because msg.value already moves MON via EVM CALL.
+            unsafe {
+                (*result).success = 1;
+                (*result).escrow_delta = 0;
+            }
             1
         }
-        Ok(Err(err)) => {
-            write_error(&err.to_string(), error_buf, error_len);
+        Err(err) => {
+            let msg = format!("{err:#}");
+            let bytes = msg.as_bytes();
+            let copy_len = bytes.len().min(error_len.saturating_sub(1));
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), error_buf, copy_len);
+                *error_buf.add(copy_len) = 0;
+                (*result).success = 0;
+            }
             0
         }
-        Err(_) => {
-            write_error("tinyvm confidential ffi panicked", error_buf, error_len);
-            0
-        }
     }
-}
-
-fn transfer_public_out(call: &TransferCall) -> TinyVmBackendTransferPublicOut {
-    let bundle = &call.bundle;
-    TinyVmBackendTransferPublicOut {
-        token: bundle.public.token,
-        from: bundle.public.from,
-        to: bundle.public.to,
-        sender_version: bundle.public.sender_version,
-        recipient_version: bundle.public.recipient_version,
-        sender_old_commitment: bundle.public.sender_old_commitment.0,
-        sender_new_commitment: bundle.public.sender_new_commitment.0,
-        recipient_old_commitment: bundle.public.recipient_old_commitment.0,
-        recipient_new_commitment: bundle.public.recipient_new_commitment.0,
-    }
-}
-
-fn runtime_backend(backend_id: u32) -> anyhow::Result<ConfidentialTinyVmBackend> {
-    anyhow::ensure!(
-        backend_id == CONFIDENTIAL_BACKEND_ID,
-        "unsupported tinyvm backend id {backend_id}"
-    );
-    Ok(ConfidentialTinyVmBackend)
-}
-
-fn verify_transfer_via_runtime_backend(
-    backend_id: u32,
-    tx_bytes: &[u8],
-    artifacts_bytes: &[u8],
-) -> anyhow::Result<TransferCall> {
-    let artifacts = decode_tinyvm_artifacts(artifacts_bytes)?;
-    let backend = runtime_backend(backend_id)?;
-    backend.verify_call(TinyVmOperation::Transfer, tx_bytes, &artifacts)?;
-    assemble_transfer_call(tx_bytes, &artifacts)
-}
-
-fn verify_public_balance_change_via_runtime_backend(
-    backend_id: u32,
-    tx_bytes: &[u8],
-    artifacts_bytes: &[u8],
-) -> anyhow::Result<PublicBalanceChangeBundle> {
-    let artifacts = decode_tinyvm_artifacts(artifacts_bytes)?;
-    let bundle = assemble_public_balance_change_call(tx_bytes, &artifacts)?;
-    let operation = match bundle.public.kind {
-        PublicBalanceChangeKind::Shield => TinyVmOperation::Shield,
-        PublicBalanceChangeKind::Unshield => TinyVmOperation::Unshield,
-    };
-    let backend = runtime_backend(backend_id)?;
-    backend.verify_call(operation, tx_bytes, &artifacts)?;
-    Ok(bundle)
-}
-
-fn public_balance_change_out(
-    bundle: &PublicBalanceChangeBundle,
-) -> TinyVmBackendPublicBalanceChangePublicOut {
-    TinyVmBackendPublicBalanceChangePublicOut {
-        kind: match bundle.public.kind {
-            PublicBalanceChangeKind::Shield => 0,
-            PublicBalanceChangeKind::Unshield => 1,
-        },
-        token: bundle.public.token,
-        owner: bundle.public.owner,
-        version: bundle.public.version,
-        public_amount: bundle.public.public_amount,
-        old_commitment: bundle.public.old_commitment.0,
-        new_commitment: bundle.public.new_commitment.0,
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tinyvm_verify_transfer_backend_call(
-    backend_id: u32,
-    tx_bytes_ptr: *const u8,
-    tx_bytes_len: usize,
-    artifacts_ptr: *const u8,
-    artifacts_len: usize,
-    out_public: *mut TinyVmBackendTransferPublicOut,
-    error_buf: *mut c_char,
-    error_len: usize,
-) -> c_int {
-    ffi_guard(error_buf, error_len, || {
-        anyhow::ensure!(!out_public.is_null(), "output pointer is null");
-        anyhow::ensure!(!tx_bytes_ptr.is_null(), "tx bytes pointer is null");
-        anyhow::ensure!(!artifacts_ptr.is_null(), "artifacts pointer is null");
-
-        let tx_bytes = unsafe { slice::from_raw_parts(tx_bytes_ptr, tx_bytes_len) };
-        let artifacts = unsafe { slice::from_raw_parts(artifacts_ptr, artifacts_len) };
-        let call = verify_transfer_via_runtime_backend(backend_id, tx_bytes, artifacts)?;
-        unsafe {
-            *out_public = transfer_public_out(&call);
-        }
-        Ok(())
-    })
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tinyvm_verify_public_balance_change_backend_call(
-    backend_id: u32,
-    tx_bytes_ptr: *const u8,
-    tx_bytes_len: usize,
-    artifacts_ptr: *const u8,
-    artifacts_len: usize,
-    out_public: *mut TinyVmBackendPublicBalanceChangePublicOut,
-    error_buf: *mut c_char,
-    error_len: usize,
-) -> c_int {
-    ffi_guard(error_buf, error_len, || {
-        anyhow::ensure!(!out_public.is_null(), "output pointer is null");
-        anyhow::ensure!(!tx_bytes_ptr.is_null(), "tx bytes pointer is null");
-        anyhow::ensure!(!artifacts_ptr.is_null(), "artifacts pointer is null");
-
-        let tx_bytes = unsafe { slice::from_raw_parts(tx_bytes_ptr, tx_bytes_len) };
-        let artifacts = unsafe { slice::from_raw_parts(artifacts_ptr, artifacts_len) };
-        let bundle =
-            verify_public_balance_change_via_runtime_backend(backend_id, tx_bytes, artifacts)?;
-        unsafe {
-            *out_public = public_balance_change_out(&bundle);
-        }
-        Ok(())
-    })
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tinyvm_backend_empty_commitment(
-    backend_id: u32,
-    out_commitment: *mut u8,
-) -> c_int {
-    if out_commitment.is_null() {
-        return 0;
-    }
-    if runtime_backend(backend_id).is_err() {
-        return 0;
-    }
-    let commitment = canonical_empty_commitment(&CryptoConfig::default());
-    unsafe {
-        ptr::copy_nonoverlapping(commitment.0.as_ptr(), out_commitment, commitment.0.len());
-    }
-    1
 }

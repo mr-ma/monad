@@ -242,12 +242,11 @@ add_library(
   "monad/reserve_balance/reserve_balance_contract.hpp"
   "monad/reserve_balance/reserve_balance_error.cpp"
   "monad/reserve_balance/reserve_balance_error.hpp"
-  # monad/tinyvm_confidential
-  "monad/tinyvm_confidential/tinyvm_confidential_contract.cpp"
-  "monad/tinyvm_confidential/tinyvm_confidential_contract.hpp"
-  "monad/tinyvm_confidential/tinyvm_confidential_error.cpp"
-  "monad/tinyvm_confidential/tinyvm_confidential_error.hpp"
-  "monad/tinyvm_confidential/tinyvm_confidential_ffi.h"
+  # monad/tinyvm — generic precompile, delegates to Rust via FFI
+  "monad/tinyvm/tinyvm_precompile.cpp"
+  "monad/tinyvm/tinyvm_precompile.hpp"
+  "monad/tinyvm/tinyvm_error.hpp"
+  "monad/tinyvm/tinyvm_ffi.h"
   # monad/staking
   "monad/staking/config.hpp"
   "monad/staking/execute_block_prelude.cpp"
