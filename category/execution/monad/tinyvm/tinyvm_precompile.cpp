@@ -113,7 +113,11 @@ TinyVmPrecompile::TinyVmPrecompile(State &state, CallTracerBase &tracer)
     : state_{state}
     , call_tracer_{tracer}
 {
-    state_.add_to_balance(TINYVM_PRECOMPILE_ADDRESS, 0);
+    // Ensure the precompile account exists in the state trie.
+    // Must be non-zero to survive EIP-161 empty account cleanup.
+    if (state_.get_balance(TINYVM_PRECOMPILE_ADDRESS) == 0) {
+        state_.add_to_balance(TINYVM_PRECOMPILE_ADDRESS, 1);
+    }
 }
 
 template <Traits traits>
