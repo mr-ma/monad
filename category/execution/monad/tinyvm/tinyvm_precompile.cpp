@@ -3,7 +3,6 @@
 // Generic TinyVM precompile. Delegates all logic to Rust via FFI.
 
 #include <category/core/keccak.hpp>
-#include <quill/LogMacros.h>
 #include <category/execution/monad/tinyvm/tinyvm_precompile.hpp>
 #include <category/execution/monad/tinyvm/tinyvm_ffi.h>
 #include <category/execution/ethereum/core/contract/abi_encode.hpp>
@@ -162,7 +161,7 @@ Result<byte_string> TinyVmPrecompile::execute(
         error_buf.data(), error_buf.size());
 
     if (rc != 1 || !result.success) {
-        LOG_ERROR("TinyVM precompile failed: {}", error_buf.data());
+        
         return TinyVmPrecompileError::VerificationFailed;
     }
 
