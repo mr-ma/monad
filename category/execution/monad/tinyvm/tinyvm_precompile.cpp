@@ -3,6 +3,7 @@
 // Generic TinyVM precompile. Delegates all logic to Rust via FFI.
 
 #include <category/core/keccak.hpp>
+#include <quill/LogMacros.h>
 #include <category/execution/monad/tinyvm/tinyvm_precompile.hpp>
 #include <category/execution/monad/tinyvm/tinyvm_ffi.h>
 #include <category/execution/ethereum/core/contract/abi_encode.hpp>
