@@ -52,10 +52,6 @@ impl TinyVmStateStore for FfiStore {
             return None;
         }
         buf.truncate(len);
-        // Check if all zeros (EVM default = not set)
-        if buf.iter().all(|&b| b == 0) {
-            return None;
-        }
         Some(buf)
     }
 
@@ -277,15 +273,10 @@ pub unsafe extern "C" fn tinyvm_apply(
     };
 
     match registry().apply_input(&ctx, &normalized_input, &mut store) {
-        Ok(_decoded) => {
-            // TODO: extract escrow_delta from the backend's state changes.
-            // For now, the backend handles escrow internally via the store.
-            // The C++ side needs to know the balance transfer amount for
-            // unshield. This will be addressed when MRC20 support lands.
-            // Shield works because msg.value already moves MON via EVM CALL.
+        Ok(decoded) => {
             unsafe {
                 (*result).success = 1;
-                (*result).escrow_delta = 0;
+                (*result).escrow_delta = decoded.metadata.as_ref().map_or(0, |m| m.escrow_delta);
             }
             1
         }
@@ -438,7 +429,7 @@ mod tests {
         let rc = unsafe {
             tinyvm_apply(
                 sender.as_ptr(), sender.len(),
-                value,
+                value, 0, // tx_value_lo, tx_value_hi
                 calldata.as_ptr(), calldata.len(),
                 std::ptr::null_mut(),
                 test_store_get,

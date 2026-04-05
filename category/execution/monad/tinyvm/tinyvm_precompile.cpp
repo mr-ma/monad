@@ -161,7 +161,6 @@ Result<byte_string> TinyVmPrecompile::execute(
         error_buf.data(), error_buf.size());
 
     if (rc != 1 || !result.success) {
-        
         return TinyVmPrecompileError::VerificationFailed;
     }
 

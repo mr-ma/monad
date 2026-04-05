@@ -48,12 +48,12 @@ public:
     static std::pair<PrecompileFunc, uint64_t>
     precompile_dispatch(byte_string_view &);
 
-private:
     // Generic execute: passes everything to Rust via FFI.
     Result<byte_string> execute(
         byte_string_view input, evmc_address const &msg_sender,
         evmc_uint256be const &msg_value);
 
+private:
     Result<byte_string> precompile_fallback(
         byte_string_view, evmc_address const &, evmc_uint256be const &);
 

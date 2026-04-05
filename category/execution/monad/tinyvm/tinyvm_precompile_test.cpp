@@ -156,10 +156,6 @@ TEST(TinyVmPrecompile, register_token_persists_storage)
     EXPECT_TRUE(exec_result.has_value())
         << "registerToken should succeed";
 
-    // Verify storage was written (at least the length slot should be non-zero)
-    // The exact slot depends on keccak(scoped_key), but we just check that
-    // SOME storage exists at 0x420
-    bool has_storage = false;
     // We can't enumerate storage, but we can verify the precompile didn't revert
     // The real test is that subsequent shield calls can read back the token config
 }
